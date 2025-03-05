@@ -13,6 +13,8 @@ Due to GitHub's file size limitations, certain large files are stored on Google 
    - The original data is in the form of a parquet file. Hence the file needs to be converted to `.csv` format to ease the process of joining the file with the taxi zones data which is in the `.csv` format.
    - Such a task is accomplished through the use of the Pandas function within Python using the `pd.read_parquet()` and `.to_csv()` functions.
 2. **Uploading the files to an Amazon S3 bucket**
-   - A general purpose bucket is created within Amazon S3 named `taxi.data.holding` as illustrated through the screenshot below.![Descriptive Alt Text](Screenshot (100).png)
+   - A general purpose bucket is created within Amazon S3 named `taxi.data.holding`.
+   - Both `.csv` files are uploaded to the bucket for storage.
+3. **
 
 
