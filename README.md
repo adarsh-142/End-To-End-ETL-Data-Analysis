@@ -15,6 +15,13 @@ Due to GitHub's file size limitations, certain large files are stored on Google 
 2. **Uploading the files to an Amazon S3 bucket**
    - A general purpose bucket is created within Amazon S3 named `taxi.data.holding`.
    - Both `.csv` files are uploaded to the bucket for storage.
-3. **
-
+3. **Assigning IAM Roles for the bucket**
+   - IAM Roles are assigned pertaining to the bucket to offer specific permissions with credentials that last for short durations.
+   - In this case, a role is assigned for full access of S3 services pertaining to the bucket which is named 'taxi.data.role'. This step helps with seamless integration of the bucket to the Snowflake data warehousing tool.
+4. **Setting the Environment on Snowflake**
+   - A warehouse and within it, a SQL worksheet, is created to facilitate SQL-based queries to help `**Extract**` the data from the bucket.
+5. **Setting up Storage Integration on Snowflake**
+   - This step is executed to allow for seamless connection to the S3 bucket with the IAM role in tow. The integration object is named `TAXI_Integration`.
+6. **Creating the Database and Schema**
+   - A database named `TAXI` and a corresponding schema named `taxi_data` is made to facilitate the handling of both tables to be extracted from the bucket.
 
