@@ -1,0 +1,250 @@
+//Creating a connection to the S3 storage where the files are kept
+ CREATE OR REPLACE STORAGE INTEGRATION TAXI_Integration
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = 'S3'
+  ENABLED = TRUE
+  STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::711387122678:role/Taxi-Data-Role'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://taxi.data.holding/')
+  COMMENT = 'Optional Comment'
+
+
+  //Getting description of the Integration Object
+  desc integration TAXI_Integration;
+
+// Creating a database to store the pertaining files
+CREATE OR REPLACE DATABASE TAXI
+
+// Constructing a schema for the database
+CREATE SCHEMA taxi_data
+
+// Creating an empty table to store the taxi data table/file
+CREATE OR REPLACE TABLE yellow_taxi_data (
+Trip_id int, VendorID int, pickup_datetime datetime, dropoff_datetime datetime, passenger_count float, 
+trip_distance float, RatecodeID float, store_and_fwd_flag varchar(5), PULocationID int, 
+DOLocationID int, payment_type int, fare_amount float, extra float,
+mta_tax float, tip_amount float, tolls_amount float, improvement_surcharge float,
+total_amount float, congestion_surcharge double, airport_fee double
+);
+
+// Creating an empty table to store the taxi zones data table/file
+CREATE OR REPLACE TABLE taxi_zones (
+LocationID int, Borough string, Zone string, service_zone string
+);
+
+// Creating a stage for successful transfer of data from S3 to Snowflake
+CREATE STAGE TAXI.taxi_data.taxi_stage
+url = 's3://taxi.data.holding/'
+storage_integration = TAXI_Integration
+
+// Checking if the needed files are recorded within the stage
+LIST @taxi_stage;
+
+// Copying taxi data table to the designated table created
+COPY INTO yellow_taxi_data
+FROM @taxi_stage/yellow_taxi_data.csv
+FILE_FORMAT = (TYPE = CSV FIELD_DELIMITER = ',' SKIP_HEADER = 1)
+ON_ERROR = 'CONTINUE'
+
+// Copying taxi zones data table to the designated table created
+COPY INTO taxi_zones
+FROM @taxi_stage/taxi_zone_lookup.csv
+FILE_FORMAT = (TYPE = CSV FIELD_DELIMITER = ',' SKIP_HEADER = 1)
+ON_ERROR = 'CONTINUE'
+
+// Checking the contents of the taxi data table
+SELECT * FROM yellow_taxi_data
+
+// Checking the contents of the taxi zones table
+SELECT * FROM taxi_zones
+
+// Joining both tables so as to provide context regarding pickup location details
+CREATE OR REPLACE TABLE detailed_taxi_data_v1 AS
+SELECT * FROM yellow_taxi_data y LEFT JOIN taxi_zones t
+ON y.pulocationid = t.LOCATIONID;
+
+SELECT * FROM detailed_taxi_data_v1
+
+//Dropping the LOCATIONID column as it does not provide much to the new data
+ALTER TABLE detailed_taxi_data_v1
+DROP LOCATIONID;
+
+// Renaming BOROUGH, ZONE and SERVICE_ZONE to differentiate it as a part of pickup location details
+ALTER TABLE detailed_taxi_data_v1
+RENAME COLUMN BOROUGH TO PICKUP_BOROUGH;
+
+ALTER TABLE detailed_taxi_data_v1
+RENAME COLUMN ZONE TO PICKUP_ZONE;
+
+ALTER TABLE detailed_taxi_data_v1
+RENAME COLUMN SERVICE_ZONE TO PICKUP_SERVICE_ZONE;
+
+SELECT * FROM detailed_taxi_data_v1
+
+// Joining both tables again so as to provide context regarding dropoff location details
+CREATE OR REPLACE TABLE detailed_taxi_data_v2 AS
+SELECT * FROM detailed_taxi_data_v1 d LEFT JOIN taxi_zones t
+ON d.DOLOCATIONID = t.LOCATIONID;
+
+SELECT * FROM detailed_taxi_data_v2
+
+ALTER TABLE detailed_taxi_data_v2
+DROP LOCATIONID;
+
+// Renaming BOROUGH, ZONE and SERVICE_ZONE to differentiate it as a part of dropoff location details
+ALTER TABLE detailed_taxi_data_v2
+RENAME COLUMN BOROUGH TO DROPOFF_BOROUGH;
+
+ALTER TABLE detailed_taxi_data_v2
+RENAME COLUMN ZONE TO DROPOFF_ZONE;
+
+ALTER TABLE detailed_taxi_data_v2
+RENAME COLUMN SERVICE_ZONE TO DROPOFF_SERVICE_ZONE;
+
+SELECT * FROM detailed_taxi_data_v2
+
+// Engineering a new column based on the hour mark at which the pickup occurred 
+ALTER TABLE detailed_taxi_data_v2 
+ADD COLUMN pickup_hour INT;
+
+// Engineering a new column based on the hour mark at which the dropoff occurred 
+ALTER TABLE detailed_taxi_data_v2 
+ADD COLUMN dropoff_hour INT;
+
+UPDATE detailed_taxi_data_v2
+SET pickup_hour = DATE_PART(HOUR, PICKUP_DATETIME),
+    dropoff_hour = DATE_PART(HOUR, DROPOFF_DATETIME);
+
+// Deleting the rows not having the pickup at the month of October
+DELETE FROM detailed_taxi_data_v2
+WHERE DATE_PART(MONTH, pickup_datetime) <> 10;
+
+// Deleting the rows where the RATECODEID column has null values 
+DELETE FROM detailed_taxi_data_v2
+WHERE RATECODEID IS NULL;
+
+// Checking number of null values relating to STORE_AND_FWD_FLAG column in an attempt to delete them, if any 
+SELECT COUNT(*)
+FROM detailed_taxi_data_v2
+WHERE STORE_AND_FWD_FLAG IS NULL;
+
+// Checking distinct values for the RATECODEID column to check for anomalies
+SELECT DISTINCT RATECODEID
+FROM detailed_taxi_data_v2;
+
+// Checking the number of rows where RATECODEID has been 99
+SELECT COUNT(*)
+FROM detailed_taxi_data_v2
+WHERE RATECODEID = 99;
+
+SELECT *
+FROM detailed_taxi_data_v2
+WHERE RATECODEID = 99;
+
+// Deleting the rows where RATECODEID has been 99
+DELETE FROM detailed_taxi_data_v2
+WHERE RATECODEID = 99;
+
+SELECT * FROM detailed_taxi_data_v2;
+
+// Checking the distinct payment_type values in case of any anomalies
+SELECT DISTINCT payment_type
+FROM detailed_taxi_data_v2;
+
+//Adding a new column RATE_CODE to translate RATECODEID to its string equivalent
+ALTER TABLE detailed_taxi_data_v2
+ADD COLUMN RATE_CODE VARCHAR(25);
+
+//Updating RATE_CODE to update translations successfully
+UPDATE detailed_taxi_data_v2
+SET RATE_CODE = CASE 
+  WHEN RATECODEID = 1 THEN 'Standard Rate'
+  WHEN RATECODEID = 2 THEN 'JFK'
+  WHEN RATECODEID = 3 THEN 'Newark'
+  WHEN RATECODEID = 4 THEN 'Nassau or Westchester'
+  WHEN RATECODEID = 5 THEN 'Negotiated Fare'
+  ELSE 'Group Ride' END;
+
+// Doing the same as RATECODEID for PAYMENT_METHOD
+ALTER TABLE detailed_taxi_data_v2
+ADD COLUMN PAYMENT_METHOD VARCHAR(15);
+
+UPDATE detailed_taxi_data_v2
+SET PAYMENT_METHOD = CASE 
+  WHEN PAYMENT_TYPE = 1 THEN 'Credit Card'
+  WHEN PAYMENT_TYPE = 2 THEN 'Cash'
+  WHEN PAYMENT_TYPE = 3 THEN 'No Charge'
+  WHEN PAYMENT_TYPE = 4 THEN 'Dispute'
+  WHEN PAYMENT_TYPE = 5 THEN 'Unknown'
+  ELSE 'Voided Trip' END;
+
+Select * from detailed_taxi_data_v2;
+
+// Dropping both RATECODEID and PAYMENT_TYPE 
+ALTER TABLE detailed_taxi_data_v2
+DROP COLUMN RATECODEID;
+
+ALTER TABLE detailed_taxi_data_v2
+DROP COLUMN PAYMENT_TYPE;
+
+// Checking for extreme outliers for passenger_count 
+SELECT 
+    MIN(passenger_count) AS min_value,
+    MAX(passenger_count) AS max_value,
+    AVG(passenger_count) AS avg_value
+FROM detailed_taxi_data_v2;
+
+// Checking if certain taxi trips has no passengers
+SELECT COUNT(*)
+FROM detailed_taxi_data_v2
+WHERE passenger_count = 0;
+
+// Checking if certain taxi trips has no passengers, no distance recorded and no fare amount which is unusual
+SELECT COUNT(*)
+FROM detailed_taxi_data_v2
+WHERE passenger_count = 0 AND TRIP_DISTANCE = 0 AND fare_amount = 0;
+
+// Deleting said rows
+DELETE FROM detailed_taxi_data_v2
+WHERE passenger_count = 0 AND TRIP_DISTANCE = 0 AND fare_amount = 0;
+
+// Checking for anomalies in trip_distance column values
+SELECT 
+    MIN(trip_distance) AS min_value,
+    MAX(trip_distance) AS max_value,
+    AVG(trip_distance) AS avg_value
+FROM detailed_taxi_data_v2;
+
+// Checking the number of trips with no recorded trip distance
+SELECT COUNT(*)
+FROM detailed_taxi_data_v2
+WHERE trip_distance = 0;
+
+// Doing the same for fare_amount as trip_distance
+SELECT 
+    MIN(fare_amount) AS min_value,
+    MAX(fare_amount) AS max_value,
+    AVG(fare_amount) AS avg_value
+FROM detailed_taxi_data_v2;
+
+SELECT COUNT(*)
+FROM detailed_taxi_data_v2
+WHERE fare_amount < 0;
+
+SELECT *
+FROM detailed_taxi_data_v2
+WHERE fare_amount < 0;
+// There is no need to delete these values as it may indicate issues with the taxi meters when it comes to recording
+
+// Encapsulating the important columns into a new table to be imported for reporting
+CREATE OR REPLACE TABLE detailed_taxi_data AS
+SELECT trip_id, vendorid, pickup_datetime, pickup_hour, pulocationid, pickup_borough, pickup_zone, pickup_service_zone, dropoff_datetime, dropoff_hour, dolocationid, dropoff_borough, dropoff_zone, dropoff_service_zone, rate_code, passenger_count, trip_distance, store_and_fwd_flag, payment_method,
+fare_amount, extra, mta_tax, improvement_surcharge, tip_amount, tolls_amount, total_amount, congestion_surcharge, airport_fee
+FROM detailed_taxi_data_v2;
+
+select * from detailed_taxi_data;
+
+//Dropping all other tables from database
+DROP TABLE yellow_taxi_data;
+DROP TABLE taxi_zones;
+DROP TABLE detailed_taxi_data_v1;
+DROP TABLE detailed_taxi_data_v2;
