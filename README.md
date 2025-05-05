@@ -1,4 +1,4 @@
-# Cloud-based Static ETL Taxi Data Analytics Pipeline with Power BI
+# End-To-End ETL Data Analysis
 This project aims at analyzing and minimizing trip fare refunds along with a focus on trip fare dispute in an attempt to minimize the loss of money from taxi companies through such refunds. This benefits the taxi companies in minimizing losses while improving customer satisfaction and issues that lead to fare disputes.
 
 ## Data Overview
